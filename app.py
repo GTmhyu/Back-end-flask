@@ -1,7 +1,5 @@
 import os
 from flask import Flask, request, jsonify, Response, render_template, url_for, redirect
-from ultralytics import YOLO
-import cv2
 from flask_pymongo import PyMongo
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager, login_user, logout_user, login_required, UserMixin, current_user
@@ -29,7 +27,6 @@ app.config["JWT_SECRET_KEY"] = os.getenv('JWT_SECRET_KEY')
 app.config['MAIL_DEFAULT_SENDER'] = 'zmaula10@gmail.com' #ganti pake email sendiri
 
 mongo = PyMongo(app)
-model = YOLO("model/orang.pt")
 locale.setlocale(locale.LC_TIME, 'id_ID.UTF-8')
 bcrypt = Bcrypt(app)
 mail = Mail(app)
@@ -42,9 +39,7 @@ login_manager.login_view = 'login'
 google_bp = make_google_blueprint(client_id=os.getenv('GOOGLE_CLIENT_ID'), client_secret=os.getenv('GOOGLE_CLIENT_SECRET'), redirect_to='google_login')
 app.register_blueprint(google_bp, url_prefix='/login')
 
-# Define the collection
-predictions_collection = mongo.db.predictions
-counts_collection = mongo.db.counts
+# Define the collections
 
 class User(UserMixin):
     def __init__(self, user_data):
@@ -110,81 +105,6 @@ def decodetoken(jwtToken):
     decode_result = decode_token(jwtToken)
     return decode_result
 
-def save_to_mongodb(predictions, location):
-    counts = {}
-
-    for result in predictions:
-        if result.boxes is not None and len(result.boxes) > 0:
-            current_date = datetime.datetime.now().strftime('%d-%m-%Y')
-            current_time = datetime.datetime.now().strftime('%H:%M:%S')
-            day_of_week = datetime.datetime.now().strftime('%A')
-
-            for pred in result.boxes[0]:
-                class_index = int(pred.cls[0])
-                class_name = model.names[class_index]
-
-                # Update counts dictionary
-                if class_name in counts:
-                    counts[class_name] += 1
-                else:
-                    counts[class_name] = 1
-
-                # Insert prediction into MongoDB
-                predictions_collection.insert_one({
-                    'label': class_name,
-                    'tanggal': current_date,
-                    'hari': day_of_week,
-                    'waktu': current_time,
-                    'location': location
-                })
-
-    # Save counts to MongoDB
-    counts_collection.insert_one({
-        'counts': counts
-    })
-
-    # Optionally, you can log counts
-    print("Counts:", counts)
-
-@app.route('/')
-def index():
-    return render_template('video.html')
-
-def generate_frames(location):
-    webcam_index = 'data/jalan.mp4' 
-    cap = cv2.VideoCapture(webcam_index)
-
-    if not cap.isOpened():
-        raise RuntimeError("Error: Could not open video file.")
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # Predict with YOLO model
-        results = model(frame)
-        save_to_mongodb(results, location)
-
-        # Draw bounding box on the frame
-        annotated_frame = results[0].plot()
-
-        # Convert the frame to JPEG format
-        ret, buffer = cv2.imencode('.jpg', annotated_frame)
-        frame = buffer.tobytes()
-
-        # Yield the frame as a byte array
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-    cap.release()
-
-@app.route('/video_feed', methods=['GET', 'POST'])
-def video_feed():
-    if request.method == 'POST':
-        location = request.form.get('location')
-        return Response(generate_frames(location), mimetype='multipart/x-mixed-replace; boundary=frame')
-    return jsonify({"message": "Method not allowed"}), 405
 
 @app.route('/register', methods=['POST'])
 def register():
